@@ -1,0 +1,135 @@
+ЗАДАЧА 1. В каких городах больше одного аэропорта?
+ЛОГИКА. Чтобы подсчитать количество аэропортов для каждого города, используем группировку по городам и агрегатную функцию count. C помощью оператора having
+выбираем строки, где количество аэропортов больше 1.
+
+select city, count(airport_code)  
+from airports ad
+group by city
+having count(airport_code) > 1
+
+ЗАДАЧА 2. В каких аэропортах есть рейсы, выполняемые самолетом с максимальной дальностью перелета?
+ЛОГИКА. Чтобы связать аэропорты и самолеты, используем соединение join дважды (посредством таблицы flights). В соединении таблиц flights и airports используем
+два условия, так как в условии задачи явно не указано, учитываются ли только отправные рейсы или отправные и прибывающие. Также при сиединениее этих таблиц
+используем вложенный запрос для определения максимальной длительноности полета. И добавляем условие, где остаются только строки с максимальной дальностью 
+полета. Чтобы избавиться от избыточности в операторе select используем оператор distinct.
+
+select distinct airport_name, a."range" 
+from aircrafts a 
+join flights f on f.aircraft_code = a.aircraft_code 
+join airports ad on (f.departure_airport = ad.airport_code or f.arrival_airport =ad.airport_code)
+and a."range" = (select max (range) from aircrafts)
+
+
+ЗАДАЧА 3. Вывести 10 рейсов с максимальным временем задержки вылета.
+ЛОГИКА. Создаем запрос из таблицы flights, указывая разницу между реальным временем вылета и временем по расписанию(задержку). В условии прописываем, что задержка
+не равно null, чтобы отсечь рейсы, которые еще не имеют времени отправки. Сортируем длительности задержки от большего к меньшему,  
+и используем оператор limit, чтобы отсечь 10 верхних строчки, то есть самые длинные задержки. 
+
+select flight_id, flight_no , actual_departure - scheduled_departure as different
+from flights f
+where actual_departure is not null and scheduled_departure is not null
+order by different desc
+limit 10
+
+ЗАДАЧА 4. Были ли брони, по которым не были получены посадочные талоны?
+ЛОГИКА. Чтобы свзязать таблицы с бронями и посадочными талонами используем два соединения. для соединения таблиц bookings и tickets достаточно внутреннего
+соединения, так как в каждой брони есть хотя бы один билет. Чтобы определить, по каким броням не получены брони, используем левое соединение, так как при
+левом соединении отсутствующим посадочным талонам будет соответствовать значение null. Далее отсекаем только строки со значением null в аргументе
+boarding_no (номер посадочного талона).
+
+select b.book_ref, t.ticket_no, t.passenger_name
+from bookings b 
+join tickets t on t.book_ref = b.book_ref  
+left join boarding_passes bp on bp.ticket_no = t.ticket_no 
+where bp.boarding_no is null
+
+ЗАДАЧА 5. Найдите количество свободных мест для каждого рейса, их % отношение к общему количеству мест в самолете. Добавьте столбец с накопительным итогом
+ - суммарное накопление количества вывезенных пассажиров из каждого аэропорта на каждый день.
+ЛОГИКА. Для выполнения первой части задачи используем три cte, чтобы разбить логику. В cte1 находим количество всех мест для каждого рейса посредством 
+соединения таблиц мест в самолете и рейсов, группировки по рейсам и агрегатной функции count.
+В сte2 делаем те же действия с таблицами посадочных талонов и рейсов для поиска забронированных мест.
+В cte3 объединяем cte1 и cte2 и вычисляем количество свободных мест и процентное соотношение количества свободных мест ко всем местам на рейсе.
+Затем обращаемся к cte 3, выводит данные по аэропортам, рейсам, количеству занятых мест и дате вылета. Формат даты приводим к date в cte1, так 
+как по условию задачи необходимо суммировать количество вылетевших пассажиров на каждый день. Также при помощи окна вычисляем сумму всех вылетевших
+группируя данные по аэропортам и сортируя по датам вылета.
+
+
+with cte1 as (
+select f.flight_id, f.actual_departure ::date as date, f.departure_airport, count (seat_no)  
+from seats s 
+join flights f on f.aircraft_code = s.aircraft_code 
+group by f.flight_id ),
+cte2 as(select f.flight_id, count (seat_no)  from boarding_passes bp 
+join flights f on f.flight_id  = bp.flight_id 
+group by f.flight_id),
+cte3 as(select cte1.*, cte2.count as c1, cte1.count - cte2.count as dif,
+round((cte1.count - cte2.count)::numeric*100/cte1.count, 2)::text || '%'
+from cte1
+join cte2 on cte1.flight_id = cte2.flight_id)
+select cte3.departure_airport, cte3.flight_id, cte3.c1, cte3.date,
+sum(cte3.c1) over (partition by cte3.departure_airport order by cte3.date)
+from cte3
+
+
+ЗАДАЧА 6. Найдите процентное соотношение перелетов по типам самолетов от общего количества.
+ЛОГИКА.  Чтобы найти общее количество рейсов, используем  агрегатную функцию count в таблице полетов. Для подсчета количества рейсов для
+каждого типа самолетов, используем функцию count и группировку по типам самолетов. Первый запрос используем как подзапрос для вычисления отношения количества
+рейсов по каждому самолету к общему количеству самолетов. Количество рейсов по кжадому рейсу приводим к численному типу с плавающей запятой, чтобы при делении
+не получить округленное до целого значение. Затем используем оператор round для округления цифры до двух знаков после запятой, приводим значение к типу текст и 
+приклеиваем к строке знак "%".
+
+
+select aircraft_code,  count(flight_id) as per_aircraft, (select count(flight_id) from flights f1) as total,
+round(
+count(flight_id)::numeric*100/(select count(flight_id) from flights f1 ),2) || '%' as percent
+from flights f 
+group by aircraft_code 
+
+ЗАДАЧА 7. Были ли города, в которые можно  добраться бизнес - классом дешевле, чем эконом-классом в рамках перелета?
+ЛОГИКА. cte1 обращается к таблице перелетов, затем присоединяем таблицу рейсов и таблицу аэропортов. С помощью оператора where отсекаем билеты на места
+бизнес-класса. Таким образом получаем таблицу, где для каждого рейса указана стоимость билета в бизнес-классе, а также город прибытия. То же самое 
+проделываем для билетов в эконом-класс в cte2. Затем соединяем cte1 и cte2 и выводим при помощи выражения сравнения строки, где стоимость билета в 
+бизнес-класс меньше стомости билета в эконом-класс. Так как в результате нет данных, делаем вывод, что городов, куда в рамках одного рейса нет билетов в бизнес-
+класс дешевле, чем в эконом-класс. 
+
+with cte1 as(
+select distinct f.flight_id, fare_conditions, amount, f.arrival_airport, ad.city  from ticket_flights tf
+join flights f on f.flight_id = tf.flight_id 
+join airports_data ad  on ad.airport_code =f.arrival_airport  
+where fare_conditions = 'Business' 
+order by flight_id),
+cte2 as(
+select distinct f.flight_id, fare_conditions, amount, f.arrival_airport, ad.city  from ticket_flights tf
+join flights f on f.flight_id = tf.flight_id
+join airports_data ad  on ad.airport_code =f.arrival_airport  
+where fare_conditions = 'Economy' 
+order by flight_id)
+select cte1.*, cte2.fare_conditions, cte2.amount
+from cte1
+join cte2 on cte1.flight_id= cte2.flight_id
+where cte1.amount < cte2.amount
+
+ЗАДАЧА 8. Между какими городами нет прямых рейсов?
+ЛОГИКА. Первый запрос выводит все возможные комбинации названий городов списка городов, в которых есть аэропорты. С помощью оператора where и условия неравества
+убираем строки, где значения атрибутов равны (одно и то же название города Абакан-Абакан и т.д.), так как самолеты не летают в пределах одного города. Затем
+формируем запрос, который предоставляетданные по всем маршрутам и вычитаем его из первого запроса при помощи оператора exept. С помощью оператора distinct
+избавляемся отдублирующихся данных.
+Однако во втором запросе не учитывается обратное направление рейса. Поэтому мы формируем третий запрос с маршрутами, меняя город вылета и город прилета местами. 
+Чтобы убрать лишнюю информацию из финальной таблицы, нужно убрать избыточные данные, поэтому эти три запроса мы заворачиваем еще в один запрос и указываем условие,
+что первый атрибут должен быть меньше второго. Таким образом убираем строки, где города меняются местами (Абакан-Анадырь, Анадырь-Абакан и т.д.)
+
+select * from (select a.city as x, a2.city as y from airports a 
+cross join airports a2 
+where a.city != a2.city
+except
+select distinct a3.city, a4.city  
+from flights f 
+join airports a3 on f.departure_airport=a3.airport_code 
+join airports a4 on f.arrival_airport = a4.airport_code 
+except
+select distinct a4.city, a3.city  
+from flights f 
+join airports a3 on f.departure_airport=a3.airport_code 
+join airports a4 on f.arrival_airport = a4.airport_code 
+order by 1,2) t
+where t.x < t.y
